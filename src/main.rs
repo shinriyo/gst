@@ -4,7 +4,11 @@
 use clap::{Parser, Subcommand};
 use std::process::Command;
 use std::{error::Error, io::{Write, stdout}};
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    execute,
+};
 use ratatui::{backend::CrosstermBackend, layout::{Constraint, Direction, Layout}, style::Modifier, text::Span, widgets::{Block, Borders, List, ListItem}, Terminal};
 
 #[derive(Parser)]
@@ -54,14 +58,22 @@ fn toggle_skip(path: &str, skip: bool) {
 
 fn run_tui() -> Result<(), Box<dyn Error>> {
     // Terminal setup
-    let stdout_handle = std::io::stdout();
-    let backend = CrosstermBackend::new(stdout_handle);
+    enable_raw_mode()?;
+    let mut stdout = stdout();
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        crossterm::cursor::Hide
+    )?;
+
+    let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
 
     let mut items = list_skip_worktree()?;
     let mut cursor = 0;
 
-    loop {
+    let result = loop {
         terminal.draw(|f| {
             let size = f.size();
             let chunks = Layout::default()
@@ -102,59 +114,67 @@ fn run_tui() -> Result<(), Box<dyn Error>> {
         })?;
 
         if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Char('q') => break,
-                KeyCode::Char('j') | KeyCode::Down => {
-                    cursor = (cursor + 1).min(items.len().saturating_sub(1));
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    cursor = cursor.saturating_sub(1);
-                }
-                KeyCode::Char('u') => {
-                    let skip = !items[cursor].skipped;
-                    toggle_skip(&items[cursor].path, skip);
-                    items[cursor].skipped = skip;
-                }
-                KeyCode::Char('!') => {
-                    // Confirm before bulk clear: only 'y' or 'n' are accepted
-                    println!("\nClear all skip-worktree flags? (y/n): ");
-                    stdout().flush()?;
-                    loop {
-                        if let Event::Key(conf) = event::read()? {
-                            match conf.code {
-                                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                                    // Bulk clear skip-worktree
-                                    let mut ls = Command::new("git")
-                                        .args(["ls-files", "-z"])
-                                        .stdout(std::process::Stdio::piped())
-                                        .spawn()?;
-                                    let _ = Command::new("git")
-                                        .args(["update-index", "-z", "--no-skip-worktree", "--stdin"])
-                                        .stdin(ls.stdout.take().unwrap())
-                                        .status()?;
-                                    for item in items.iter_mut() {
-                                        item.skipped = false;
+            if key.kind == KeyEventKind::Press {
+                match key.code {
+                    KeyCode::Char('q') => break Ok(()),
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        cursor = (cursor + 1).min(items.len().saturating_sub(1));
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        cursor = cursor.saturating_sub(1);
+                    }
+                    KeyCode::Char('u') => {
+                        let skip = !items[cursor].skipped;
+                        toggle_skip(&items[cursor].path, skip);
+                        items[cursor].skipped = skip;
+                    }
+                    KeyCode::Char('!') => {
+                        // Confirm before bulk clear
+                        terminal.clear()?;  // 確認メッセージ用に画面をクリア
+                        terminal.backend_mut().write_all(b"\nClear all skip-worktree flags? (y/n): ")?;
+                        terminal.backend_mut().flush()?;  // 修正: 正しいflushの呼び出し
+
+                        loop {
+                            if let Event::Key(conf) = event::read()? {
+                                match conf.code {
+                                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                        // Bulk clear skip-worktree
+                                        let mut ls = Command::new("git")
+                                            .args(["ls-files", "-z"])
+                                            .stdout(std::process::Stdio::piped())
+                                            .spawn()?;
+                                        let _ = Command::new("git")
+                                            .args(["update-index", "-z", "--no-skip-worktree", "--stdin"])
+                                            .stdin(ls.stdout.take().unwrap())
+                                            .status()?;
+                                        for item in items.iter_mut() {
+                                            item.skipped = false;
+                                        }
+                                        break;
                                     }
-                                    break;
-                                }
-                                KeyCode::Char('n') | KeyCode::Char('N') => {
-                                    // Cancel bulk clear
-                                    break;
-                                }
-                                _ => {
-                                    // ignore other keys
-                                    continue;
+                                    KeyCode::Char('n') | KeyCode::Char('N') => {
+                                        break;
+                                    }
+                                    _ => continue,
                                 }
                             }
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
-    }
+    };
 
-    Ok(())
+    // Cleanup
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    )?;
+
+    result
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

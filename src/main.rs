@@ -1,5 +1,5 @@
 // src/main.rs
-// Rust製CLIツール「gst」: --skip-worktree 管理用 tig風 TUI
+// Rust CLI tool "gst": --skip-worktree management tig like TUI
 
 use clap::{Parser, Subcommand};
 use std::process::Command;
@@ -14,7 +14,7 @@ use ratatui::{backend::CrosstermBackend, layout::{Constraint, Direction, Layout}
 #[derive(Parser)]
 #[command(name = "gst", about = "Manage skip-worktree flags with a TUI", version)]
 struct Cli {
-    /// CLIモード: skip/resume 一括操作専用
+    /// CLI mode: skip/resume bulk operation only
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -130,9 +130,9 @@ fn run_tui() -> Result<(), Box<dyn Error>> {
                     }
                     KeyCode::Char('!') => {
                         // Confirm before bulk clear
-                        terminal.clear()?;  // 確認メッセージ用に画面をクリア
+                        terminal.clear()?;
                         terminal.backend_mut().write_all(b"\nClear all skip-worktree flags? (y/n): ")?;
-                        terminal.backend_mut().flush()?;  // 修正: 正しいflushの呼び出し
+                        terminal.backend_mut().flush()?;
 
                         loop {
                             if let Event::Key(conf) = event::read()? {
